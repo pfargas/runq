@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runq"
+version = "0.1.0"
+description = "Resumable parameter sweeps on a SQLite queue: one plain function in, a results table out. Local multi-GPU and SLURM."
+authors = [{ name = "Pau Fargas", email = "pau.fargas@upc.edu" }]
+readme = "README.md"
+requires-python = ">=3.11"
+# Deliberately zero runtime dependencies: the queue must install anywhere (clusters,
+# conda, bare venvs) without touching the project's own stack.
+dependencies = []
+
+[project.optional-dependencies]
+table = ["pandas>=2.2"]
+
+[project.scripts]
+runq = "runq.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pandas>=2.2",
+]
