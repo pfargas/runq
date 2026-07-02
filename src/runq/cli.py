@@ -14,9 +14,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 
 from runq import merge as merge_mod
-from runq import store
+from runq import notify, store
 from runq.backends import local
 from runq.grid import build_grid, parse_axes
 from runq.params import ParamSpace, key_json, run_label
@@ -53,6 +54,9 @@ def main(argv=None) -> int:
                     help="CPU threads per worker (0 = split host cores evenly)")
     pr.add_argument("--log-dir", default=None,
                     help="per-worker logs when >1 worker (default: <out-root>/logs)")
+    pr.add_argument("--notify", action="store_true",
+                    help="email the final queue status when the drain finishes "
+                         "(config: ~/.config/runq/notify.toml; verify with runq notify --test)")
 
     ps = sub.add_parser("status", help="queue counts")
     add_common(ps)
@@ -69,6 +73,12 @@ def main(argv=None) -> int:
     pm.add_argument("dest")
     pm.add_argument("sources", nargs="+")
 
+    pn = sub.add_parser("notify", help="email the queue status now "
+                                       "(config: ~/.config/runq/notify.toml)")
+    add_common(pn)
+    pn.add_argument("--test", action="store_true",
+                    help="send a test email to verify the SMTP config")
+
     args = ap.parse_args(argv)
     return _dispatch(args)
 
@@ -82,13 +92,26 @@ def _dispatch(args) -> int:
         return 0
 
     if args.cmd == "run":
+        started = time.monotonic()
         out_root = args.out_root or (os.path.dirname(args.db) or ".")
         conn = store.connect(args.db)
         requeued = store.requeue(conn)
         if requeued:
             print(f"requeued {requeued} interrupted run(s)")
-        n, total = _enqueue_grid(conn, args)
-        print(f"enqueued {n} new point(s) of {total}; status={store.status_counts(conn)}")
+        # No --axis/--seeds ⇒ pure drain of an already-filled queue (e.g. by a project's
+        # enqueue script). Enqueueing the bare default point must be asked for explicitly
+        # (runq enqueue TARGET), or it would pollute externally planned sweeps.
+        if args.axis or args.seeds is not None:
+            n, total = _enqueue_grid(conn, args)
+            print(f"enqueued {n} new point(s) of {total}; status={store.status_counts(conn)}")
+        else:
+            counts = store.status_counts(conn)
+            print(f"no axes given — draining the existing queue; status={counts}")
+            if not counts.get("todo"):
+                print("nothing todo. Fill the queue first (project enqueue script, or "
+                      "runq enqueue/run with --axis/--seeds).")
+                conn.close()
+                return 0
 
         if args.serial:
             fn = load_target(args.target)
@@ -102,6 +125,13 @@ def _dispatch(args) -> int:
         counts = store.status_counts(conn)
         print(f"final status: {counts}")
         conn.close()
+        if args.notify:
+            # a broken mail setup must never turn a finished sweep into a failure
+            try:
+                subject = notify.notify_queue(args.db, elapsed_s=time.monotonic() - started)
+                print(f"notification email sent: {subject}")
+            except Exception as exc:
+                print(f"WARNING: could not send notification email: {exc}")
         return 1 if counts.get("failed") else 0
 
     if args.cmd == "status":
@@ -134,6 +164,18 @@ def _dispatch(args) -> int:
         counts = merge_mod.merge_paths(args.dest, args.sources)
         print(f"{args.dest}: {counts}")
         return 0
+
+    if args.cmd == "notify":
+        try:
+            if args.test:
+                notify.notify_test()
+                print("test email sent")
+            else:
+                print(f"email sent: {notify.notify_queue(args.db)}")
+            return 0
+        except Exception as exc:
+            print(f"could not send email: {exc}")
+            return 1
 
     raise SystemExit(f"unknown command {args.cmd!r}")
 

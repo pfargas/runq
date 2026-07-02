@@ -62,6 +62,28 @@ def test_failed_and_requeue_commands(tmp_path, toy_path, capsys):
     conn.close()
 
 
+def test_run_without_axes_is_pure_drain(tmp_path, toy_path, capsys):
+    """No --axis/--seeds: drain the pre-filled queue, never enqueue a default point."""
+    db = _db(tmp_path)
+    main(["enqueue", toy_path, "--axis", "a=1,2", "--db", db])
+    capsys.readouterr()
+    rc = main(["run", toy_path, "--db", db, "--serial"])
+    assert rc == 0
+    conn = store.connect(db)
+    assert store.status_counts(conn) == {"done": 2}  # exactly the enqueued grid, no extras
+    conn.close()
+
+
+def test_run_without_axes_on_empty_queue_is_noop(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    rc = main(["run", toy_path, "--db", db, "--serial"])
+    assert rc == 0
+    assert "nothing todo" in capsys.readouterr().out
+    conn = store.connect(db)
+    assert store.status_counts(conn) == {}
+    conn.close()
+
+
 def test_seeds_and_axis_seed_conflict(tmp_path, toy_path):
     with pytest.raises(SystemExit, match="not both"):
         main(["enqueue", toy_path, "--axis", "seed=0,1", "--seeds", "2",

@@ -48,4 +48,22 @@ Design (decided 2026-07-02, extracted from qvarnet's `soft_sphere_gas` + `cs_swe
   interrupted points. To spread one sweep over several nodes, partition by an axis
   (e.g. one job per seed, each with its own `--db`) and `runq merge` afterwards.
 
+- **Email notification**: `runq run ... --notify` emails you when the drain finishes
+  (fully drained / N failed / stopped with unfinished); `runq notify --db X` sends the
+  current status on demand (drop it at the end of an sbatch script); `runq notify --test`
+  verifies the setup. Stdlib SMTP; configure once in `~/.config/runq/notify.toml`:
+
+  ```toml
+  [email]
+  to = "you@example.com"
+  smtp_host = "smtp.gmail.com"
+  smtp_port = 587                # 587 = STARTTLS, 465 = SSL
+  user = "you@gmail.com"
+  password = "app-password"      # Gmail: App Password (needs 2FA), not your real password
+  ```
+
+  Env vars override the file on clusters: `RUNQ_EMAIL_TO`, `RUNQ_SMTP_HOST`,
+  `RUNQ_SMTP_PORT`, `RUNQ_SMTP_USER`, `RUNQ_SMTP_PASSWORD`, `RUNQ_EMAIL_FROM`,
+  `RUNQ_NOTIFY_CONFIG`. A failing mail setup never breaks a run (warning only).
+
 Naming convention: hyperparameters are spelled `HyperParams` in full, never abbreviated.
