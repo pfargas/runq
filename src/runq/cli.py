@@ -3,6 +3,7 @@
     runq run point.py --axis L=0.5,0.8 --axis N=2,5 --seeds 0 1 2 --gpus 0,1
     runq enqueue point.py --axis lr=1e-3,3e-3        # queue without running
     runq status / runq failed / runq requeue
+    runq table --group L,N --sort e_per_n            # seed-averaged results
     runq merge merged.db pc1.db pc2.db
 
 ``--seeds 0 1 2`` is sugar for ``--axis seed=0,1,2`` (the target must have a ``seed``
@@ -18,6 +19,7 @@ import time
 
 from runq import merge as merge_mod
 from runq import notify, store
+from runq import table as table_mod
 from runq.backends import local
 from runq.grid import build_grid, parse_axes
 from runq.params import ParamSpace, key_json, run_label
@@ -78,6 +80,23 @@ def main(argv=None) -> int:
     add_common(pn)
     pn.add_argument("--test", action="store_true",
                     help="send a test email to verify the SMTP config")
+
+    pt = sub.add_parser("table", help="print the results table (params + results)")
+    add_common(pt)
+    pt.add_argument("--status", default="done", choices=(*store.STATUSES, "all"),
+                    help="rows to show (default: done)")
+    pt.add_argument("--where", action="append", default=[], metavar="NAME=VALUE",
+                    help="filter, repeatable: L=0.5, N>=5, label!=bad (=,!=,<,<=,>,>=)")
+    pt.add_argument("--cols", default=None, metavar="A,B,C",
+                    help="show only these columns (default: axes + results)")
+    pt.add_argument("--group", default=None, metavar="A,B",
+                    help="average the other axes away (seeds): mean + _sem + n per group")
+    pt.add_argument("--sort", default=None, metavar="COL", help="sort by this column")
+    pt.add_argument("--desc", action="store_true", help="sort descending")
+    pt.add_argument("--limit", type=int, default=50,
+                    help="max rows printed, 0 = no limit (default: 50)")
+    pt.add_argument("--csv", default=None, metavar="PATH",
+                    help="write the full table here instead of printing it")
 
     args = ap.parse_args(argv)
     return _dispatch(args)
@@ -177,7 +196,62 @@ def _dispatch(args) -> int:
             print(f"could not send email: {exc}")
             return 1
 
+    if args.cmd == "table":
+        return _table(args)
+
     raise SystemExit(f"unknown command {args.cmd!r}")
+
+
+def _table(args) -> int:
+    status = None if args.status == "all" else args.status
+    conn = store.connect(args.db)
+    try:
+        df = table_mod.load_table(conn, status=status)
+    except ImportError:  # pandas lives behind the [table] extra
+        raise SystemExit("runq table needs pandas: pip install 'runq[table]'") from None
+    finally:
+        conn.close()
+    if df.empty:
+        print(f"{args.db}: no {args.status} rows")
+        return 0
+
+    try:
+        df = table_mod.filter_rows(df, args.where)
+        if args.group:
+            df = table_mod.group_mean(df, args.group.split(","))
+        elif not args.cols:
+            # status only means something when several are on screen; error only when
+            # the failures are what you asked to see
+            keep = ("status",) if status is None else ("error",) if status == "failed" else ()
+            df = table_mod.natural_columns(df, keep=keep)
+        if args.cols:
+            wanted = [c.strip() for c in args.cols.split(",")]
+            missing = [c for c in wanted if c not in df.columns]
+            if missing:
+                raise KeyError(f"no column(s) {missing} in the table; "
+                               f"have: {', '.join(map(str, df.columns))}")
+            df = df[wanted]
+        if args.sort:
+            if args.sort not in df.columns:
+                raise KeyError(f"cannot sort by {args.sort!r}: not in the table")
+            df = df.sort_values(args.sort, ascending=not args.desc)
+    except (KeyError, ValueError) as exc:
+        # KeyError.__str__ reprs its argument; args[0] is the message we wrote
+        raise SystemExit(exc.args[0] if exc.args else str(exc)) from None
+
+    if df.empty:
+        print("no rows matched the filter")
+        return 0
+
+    if args.csv:
+        os.makedirs(os.path.dirname(args.csv) or ".", exist_ok=True)
+        df.to_csv(args.csv, index=False)  # the CSV keeps the full traceback
+        print(f"wrote {len(df)} row(s) x {len(df.columns)} column(s) to {args.csv}")
+        return 0
+
+    print(table_mod.format_table(table_mod.shorten_errors(df), max_rows=args.limit or None))
+    print(f"\n{len(df)} row(s)")
+    return 0
 
 
 def _enqueue_grid(conn, args) -> tuple[int, int]:

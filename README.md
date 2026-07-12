@@ -15,6 +15,7 @@ def run_point(L=0.8, N=5, lr=3e-3, n_epochs=2000, seed=0, run_dir=None):
 runq run cs_point.py --axis L=0.5,0.8,1.2 --axis N=2,5,10 --seeds 0 1 2 --gpus 0,1
 runq status
 runq failed
+runq table --group L,N --sort e_per_n
 ```
 
 There is **no physics/hyperparameter split at the interface** — one flat `--axis`
@@ -31,7 +32,21 @@ Design (decided 2026-07-02, extracted from qvarnet's `soft_sphere_gas` + `cs_swe
 - **Local backend**: one worker subprocess per GPU (`CUDA_VISIBLE_DEVICES` pinned,
   CPU threads capped so workers don't thrash each other).
 - **Results**: a single `result_json` column; `runq.load_table(conn)` expands params +
-  results into a pandas DataFrame (the only place pandas is needed).
+  results into a pandas DataFrame (the only place pandas is needed). `runq table` is that
+  same DataFrame from the shell, for when you don't want to open a notebook:
+
+  ```bash
+  runq table                                    # done rows: axes + results
+  runq table --group L,N --sort e_per_n         # seeds averaged away: mean + _sem + n
+  runq table --where L=0.5 --where N>=5         # =, !=, <, <=, >, >= ; repeatable (ANDed)
+  runq table --status failed                    # or --status all
+  runq table --cols L,N,e_per_n --csv out.csv   # full table to disk, not the terminal
+  ```
+
+  `--group` aggregates **results only** — parameter axes are dropped, never averaged, and
+  `n` reports how many runs went into each mean. If `n` exceeds your seed count you pooled
+  over an axis you forgot to name, which is the number to check before trusting the error
+  bars. Needs the extra: `pip install 'runq[table]'`.
 - **Merge**: rows are keyed, so multi-machine sweeps merge with done-precedence
   (`runq merge merged.db pc1.db pc2.db`).
 - **SLURM**: no backend needed — a job is just an sbatch script wrapping `runq run`:

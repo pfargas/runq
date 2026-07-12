@@ -120,6 +120,87 @@ def test_merge_command(tmp_path, toy_path, capsys):
     conn.close()
 
 
+def test_table_command_prints_axes_and_results(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2", "--seeds", "0", "1", "--db", db, "--serial"])
+    capsys.readouterr()
+
+    assert main(["table", "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "energy" in out and "seed" in out  # a result and an axis
+    assert "started_at" not in out  # bookkeeping hidden by default
+    assert "4 row(s)" in out
+
+
+def test_table_where_and_cols_and_sort(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2,3", "--seeds", "0", "--db", db, "--serial"])
+    capsys.readouterr()
+
+    main(["table", "--db", db, "--where", "a>=2", "--cols", "a,energy",
+          "--sort", "energy", "--desc"])
+    out = capsys.readouterr().out
+    assert "2 row(s)" in out and "tag" not in out  # filtered rows, selected columns
+    body = [ln.split() for ln in out.strip().splitlines()[1:3]]
+    assert [row[0] for row in body] == ["3.0", "2.0"]  # descending by energy
+
+
+def test_table_group_averages_seeds(tmp_path, toy_path, capsys):
+    """The headline use: energy(a) with the seeds averaged away."""
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2", "--seeds", "0", "1", "--db", db, "--serial"])
+    capsys.readouterr()
+
+    assert main(["table", "--db", db, "--group", "a"]) == 0
+    out = capsys.readouterr().out
+    assert "energy_sem" in out and "2 row(s)" in out
+    assert "seed" not in out  # averaged over, so it must not appear as a column
+
+
+def test_table_csv_export(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2", "--db", db, "--serial"])
+    capsys.readouterr()
+    csv = str(tmp_path / "out" / "results.csv")
+
+    assert main(["table", "--db", db, "--csv", csv]) == 0
+    assert "wrote 2 row(s)" in capsys.readouterr().out
+    header, *rows = open(csv).read().strip().splitlines()
+    assert "energy" in header and len(rows) == 2
+
+
+def test_table_failed_shows_the_exception_not_the_stack(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=-1", "--db", db, "--serial"])
+    capsys.readouterr()
+
+    main(["table", "--db", db, "--status", "failed"])
+    out = capsys.readouterr().out
+    assert "negative a" in out  # the exception line
+    assert "Traceback" not in out  # ...without the stack that would wreck the layout
+
+
+def test_table_bad_column_message_is_clean(tmp_path, toy_path, capsys):
+    """SystemExit must carry the message, not KeyError's repr of it."""
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1", "--db", db, "--serial"])
+    with pytest.raises(SystemExit) as exc:
+        main(["table", "--db", db, "--sort", "nosuch"])
+    assert str(exc.value) == "cannot sort by 'nosuch': not in the table"
+
+
+def test_table_empty_and_bad_column(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["enqueue", toy_path, "--axis", "a=1", "--db", db])  # queued, never run
+    capsys.readouterr()
+
+    assert main(["table", "--db", db]) == 0
+    assert "no done rows" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit, match="nope"):
+        main(["table", "--db", db, "--status", "all", "--where", "nope=1"])
+
+
 def test_worker_env_pins_device_and_threads():
     env = local.worker_env("1", 4, base={"PATH": "/bin"})
     assert env["CUDA_VISIBLE_DEVICES"] == "1"
