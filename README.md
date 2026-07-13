@@ -16,6 +16,7 @@ runq run cs_point.py --axis L=0.5,0.8,1.2 --axis N=2,5,10 --seeds 0 1 2 --gpus 0
 runq status
 runq failed
 runq table --group L,N --sort e_per_n
+runq dirs --where L=0.8 --where N=10        # artifact paths of the matching runs
 ```
 
 There is **no physics/hyperparameter split at the interface** — one flat `--axis`
@@ -47,6 +48,23 @@ Design (decided 2026-07-02, extracted from qvarnet's `soft_sphere_gas` + `cs_swe
   `n` reports how many runs went into each mean. If `n` exceeds your seed count you pooled
   over an axis you forgot to name, which is the number to check before trusting the error
   bars. Needs the extra: `pip install 'runq[table]'`.
+- **Artifacts**: each run gets `<out-root>/runs/<hash8>/`, the hash being that of the full
+  parameter dict. The directory name is *not* meant to be read: a name encoding every swept
+  axis grows with the sweep's dimensionality and eventually blows past the filesystem's
+  255-byte limit. You ask for a point by its physics instead, and `runq dirs` hands you the
+  paths — same `--where` vocabulary as `table`, but stdlib-only, so it works without pandas:
+
+  ```bash
+  runq dirs --where L=0.8 --where N=40              # one path per line
+  runq dirs --where L=0.8 --sort e_per_n --limit 1  # the best run's directory
+  runq dirs --where N=40 --label                    # label \t path, when you want both
+  runq dirs --where N=40 -0 | xargs -0 du -sh       # feed the shell
+  ```
+
+  It prints nothing and exits 1 when nothing matches, so a no-match can't hand a stray path
+  to whatever consumes the output. The readable `label` still exists in the DB — it names
+  runs in the worker log and in `runq failed` — and each run's `run.json` carries its full
+  params, so a directory is still self-describing from the inside.
 - **Merge**: rows are keyed, so multi-machine sweeps merge with done-precedence
   (`runq merge merged.db pc1.db pc2.db`).
 - **SLURM**: no backend needed — a job is just an sbatch script wrapping `runq run`:

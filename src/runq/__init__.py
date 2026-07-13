@@ -6,7 +6,8 @@ job. See README.md.
 """
 
 from runq.grid import build_grid, parse_axes
-from runq.params import ParamSpace, key_json, run_label
+from runq.params import ParamSpace, dir_hash, hash8, key_json, run_label
+from runq.query import filter_rows, load_rows
 from runq.runner import Skip, drain
 from runq.store import connect
 from runq.table import load_table
@@ -19,8 +20,12 @@ __all__ = [
     "Skip",
     "build_grid",
     "connect",
+    "dir_hash",
     "drain",
+    "filter_rows",
+    "hash8",
     "key_json",
+    "load_rows",
     "load_table",
     "load_target",
     "parse_axes",

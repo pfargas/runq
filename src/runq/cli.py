@@ -4,10 +4,12 @@
     runq enqueue point.py --axis lr=1e-3,3e-3        # queue without running
     runq status / runq failed / runq requeue
     runq table --group L,N --sort e_per_n            # seed-averaged results
+    runq dirs --where L=0.8 --where N=40             # artifact paths, for the shell
     runq merge merged.db pc1.db pc2.db
 
 ``--seeds 0 1 2`` is sugar for ``--axis seed=0,1,2`` (the target must have a ``seed``
-parameter). Artifacts land in ``<out-root>/runs/<label>/`` next to the DB by default.
+parameter). Artifacts land in ``<out-root>/runs/<hash>/`` next to the DB by default;
+you find them with ``runq dirs``, not by reading the path.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import sys
 import time
 
 from runq import merge as merge_mod
-from runq import notify, store
+from runq import notify, query, store
 from runq import table as table_mod
 from runq.backends import local
 from runq.grid import build_grid, parse_axes
@@ -80,6 +82,22 @@ def main(argv=None) -> int:
     add_common(pn)
     pn.add_argument("--test", action="store_true",
                     help="send a test email to verify the SMTP config")
+
+    pdir = sub.add_parser("dirs", help="artifact directories of the runs matching a filter")
+    add_common(pdir)
+    pdir.add_argument("--status", default="done", choices=(*store.STATUSES, "all"),
+                      help="rows to consider (default: done)")
+    pdir.add_argument("--where", action="append", default=[], metavar="NAME=VALUE",
+                      help="filter, repeatable: L=0.5, N>=5, seed!=3 (=,!=,<,<=,>,>=)")
+    pdir.add_argument("--sort", default=None, metavar="COL", help="sort by this column")
+    pdir.add_argument("--desc", action="store_true", help="sort descending")
+    pdir.add_argument("--limit", type=int, default=0, help="max paths printed (0 = all)")
+    pdir.add_argument("--exists", action="store_true",
+                      help="only paths that are actually on disk")
+    pdir.add_argument("--label", action="store_true",
+                      help="prefix each path with the run's label (TAB-separated)")
+    pdir.add_argument("-0", "--null", action="store_true",
+                      help="NUL-separate the output, for xargs -0")
 
     pt = sub.add_parser("table", help="print the results table (params + results)")
     add_common(pt)
@@ -196,10 +214,56 @@ def _dispatch(args) -> int:
             print(f"could not send email: {exc}")
             return 1
 
+    if args.cmd == "dirs":
+        return _dirs(args)
+
     if args.cmd == "table":
         return _table(args)
 
     raise SystemExit(f"unknown command {args.cmd!r}")
+
+
+def _dirs(args) -> int:
+    """Filter → artifact paths, one per line, so the shell can take it from there.
+
+    This is what lets the run directories be named by hash alone: nobody has to read a
+    path to find a point any more, they ask for it by the physics.
+    """
+    status = None if args.status == "all" else args.status
+    conn = store.connect(args.db)
+    try:
+        rows = query.load_rows(conn, status=status, db_path=args.db)
+    finally:
+        conn.close()
+
+    try:
+        rows = query.filter_rows(rows, args.where)
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(exc.args[0] if exc.args else str(exc)) from None
+
+    if args.sort:
+        if not any(args.sort in r for r in rows):
+            raise SystemExit(f"cannot sort by {args.sort!r}: not in the table")
+        # rows missing the key sort last, whichever direction we are going
+        rows.sort(key=lambda r: (r.get(args.sort) is None, r.get(args.sort, 0)),
+                  reverse=args.desc)
+
+    rows = [r for r in rows if r.get("run_dir")]  # a todo row has no artifacts yet
+    if args.exists:
+        rows = [r for r in rows if os.path.isdir(r["run_dir"])]
+    if args.limit:
+        rows = rows[: args.limit]
+
+    if not rows:
+        # nothing on stdout: a no-match must not feed a stray path to whatever consumes this
+        print("no run directories matched the filter", file=sys.stderr)
+        return 1
+
+    end = "\0" if args.null else "\n"
+    for r in rows:
+        line = f"{r['label']}\t{r['run_dir']}" if args.label else r["run_dir"]
+        print(line, end=end)
+    return 0
 
 
 def _table(args) -> int:

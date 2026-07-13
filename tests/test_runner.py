@@ -5,7 +5,7 @@ import pytest
 
 from runq import store
 from runq.grid import build_grid
-from runq.params import ParamSpace, key_json, run_label
+from runq.params import ParamSpace, dir_hash, key_json, run_label
 from runq.runner import drain, execute_claimed
 
 
@@ -100,3 +100,38 @@ def test_unserializable_result_values_are_coerced(tmp_path):
     result = json.loads(store.fetch(conn, "done")[0]["result_json"])
     assert result["e"] == 1.25
     assert isinstance(result["obj"], str)
+
+
+def test_run_dir_is_named_by_hash_not_label(tmp_path, toy_fn, toy_space):
+    """The path is the hash; the label stays readable for logs and `runq failed`.
+
+    A label carrying every swept axis grows with the sweep's dimensionality and eventually
+    exceeds the filesystem's 255-byte name limit. Nothing parses the path, so it only has
+    to be unique -- `runq dirs --where ...` is how a point is found.
+    """
+    conn = store.connect(str(tmp_path / "q.db"))
+    grid = _enqueue_grid(conn, toy_space, {"a": [1.0, 2.0], "seed": [0]})
+    drain(conn, toy_fn, toy_space, str(tmp_path), log=lambda *_: None)
+
+    for row in store.fetch(conn, "done"):
+        params = json.loads(row["params_json"])
+        name = os.path.basename(row["run_dir"])
+        assert name == dir_hash(params)
+        assert len(name) == 12 and "a" + str(params["a"]) not in name
+        # the human-readable label survives, it just no longer names the directory
+        assert row["label"].startswith("a")
+        assert os.path.isfile(os.path.join(tmp_path, row["run_dir"], "run.json"))
+
+    # distinct points never collide on the same directory
+    dirs = {r["run_dir"] for r in store.fetch(conn, "done")}
+    assert len(dirs) == len(grid)
+
+
+def test_run_dir_survives_a_sweep_too_wide_to_name(tmp_path, toy_fn, toy_space):
+    """The case that motivated the change: enough axes and the old label was unopenable."""
+    conn = store.connect(str(tmp_path / "q.db"))
+    params = {"a": 1.0, "b": 2, "tag": "x" * 300, "flag": False, "seed": 0}
+    store.enqueue(conn, key_json(params), run_label(params, list(params)))
+    row = store.claim_next(conn)
+    assert len(row["label"]) > 255  # ENAMETOOLONG territory for a directory
+    assert execute_claimed(conn, row, toy_fn, toy_space, str(tmp_path)) == "done"

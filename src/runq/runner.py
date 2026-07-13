@@ -12,7 +12,7 @@ import os
 import traceback
 
 from runq import store
-from runq.params import ParamSpace
+from runq.params import ParamSpace, dir_hash
 
 RUNS_SUBDIR = "runs"
 
@@ -27,12 +27,19 @@ class Skip(Exception):
 def execute_claimed(conn, row, fn, space: ParamSpace, out_root: str) -> str:
     """Run one claimed (status ``running``) row. Returns the final status.
 
-    Creates ``<out_root>/runs/<label>/`` and injects it as ``run_dir`` if the target
+    Creates ``<out_root>/runs/<dir_hash>/`` and injects it as ``run_dir`` if the target
     accepts one; writes ``run.json`` (params + result) there on success. Failures are
     recorded and re-raised so the caller decides whether to keep draining.
+
+    The directory is named by the hash of the full parameter dict, not by the label: a
+    label carrying every swept axis grows without bound as a sweep gains dimensions, and
+    hits the filesystem's name limit. Nothing parses the path — the DB stores ``run_dir``,
+    and ``runq dirs --where ...`` is how you find a point — so the name only has to be
+    unique, which is exactly what the hash guarantees. ``label`` stays human-readable for
+    the worker log and ``runq failed``; ``run.json`` inside carries the full params.
     """
     params = json.loads(row["params_json"])
-    rel = os.path.join(RUNS_SUBDIR, row["label"])
+    rel = os.path.join(RUNS_SUBDIR, dir_hash(params))
     run_path = os.path.join(out_root, rel)
     os.makedirs(run_path, exist_ok=True)
 

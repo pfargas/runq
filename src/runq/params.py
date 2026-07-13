@@ -111,8 +111,27 @@ def key_json(params: dict) -> str:
     return json.dumps(params, sort_keys=True, separators=(",", ":"))
 
 
+def param_hash(params: dict, width: int = 8) -> str:
+    """Short digest of the canonical param dict — the identity of a point, in `width` hex."""
+    return hashlib.sha1(key_json(params).encode()).hexdigest()[:width]
+
+
 def hash8(params: dict) -> str:
-    return hashlib.sha1(key_json(params).encode()).hexdigest()[:8]
+    """8 hex for the label suffix, where it only disambiguates within one swept-value cell."""
+    return param_hash(params, 8)
+
+
+# The artifact directory is named by the hash *alone*, so its uniqueness is not backstopped
+# by any readable prefix: a collision would silently point two different runs at one
+# directory. That makes the birthday bound the thing to size against, not the mean case —
+# 8 hex (32 bits) is ~1% collision odds at 10^4 runs, which a big sweep reaches. 12 hex
+# (48 bits) puts it at ~2e-7 there, and a directory name is not where bytes are scarce.
+DIR_HASH_WIDTH = 12
+
+
+def dir_hash(params: dict) -> str:
+    """Name of a point's artifact directory."""
+    return param_hash(params, DIR_HASH_WIDTH)
 
 
 def run_label(params: dict, swept: list[str] | tuple[str, ...] = ()) -> str:

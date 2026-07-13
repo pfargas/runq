@@ -13,20 +13,11 @@ filter and group by. Seed-averaging is a one-liner from here::
 from __future__ import annotations
 
 import json
-import operator
+
+from runq.query import OPS as _OPS  # one operator table, shared with the pandas-free filter
 
 # Queue bookkeeping, not physics: never averaged over, and hidden from the default view.
 BOOKKEEPING = ("id", "status", "run_dir", "error", "started_at", "finished_at")
-
-# Two-character operators must be tried first, or "L>=1" would split on ">".
-_OPS = (
-    ("!=", operator.ne),
-    (">=", operator.ge),
-    ("<=", operator.le),
-    ("=", operator.eq),
-    (">", operator.gt),
-    ("<", operator.lt),
-)
 
 
 def load_table(conn, status: str | None = "done"):

@@ -214,3 +214,53 @@ def test_cpu_threads_split():
     n = os.cpu_count() or 8
     assert local.cpu_threads_per_worker(2) == max(1, n // 2)
     assert local.cpu_threads_per_worker(10_000) == 1
+
+
+# ── runq dirs ────────────────────────────────────────────────────────────────────────
+
+
+def test_dirs_prints_paths_for_matching_runs(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2", "--axis", "b=2,3", "--seeds", "0",
+          "--db", db, "--serial"])
+    capsys.readouterr()
+
+    assert main(["dirs", "--where", "a=1", "--db", db]) == 0
+    paths = capsys.readouterr().out.split()
+    assert len(paths) == 2  # a=1 crossed with b=2,3
+    for p in paths:
+        # absolute and usable straight away: the DB stores run_dir relative to itself
+        assert os.path.isfile(os.path.join(p, "run.json"))
+
+
+def test_dirs_filters_on_results_and_sorts(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1,2", "--axis", "b=2,3", "--seeds", "0",
+          "--db", db, "--serial"])
+    capsys.readouterr()
+
+    # energy = a*b + seed, so the grid gives 2, 3, 4, 6: filtering on a result column
+    main(["dirs", "--where", "energy>=4", "--sort", "energy", "--db", db])
+    paths = capsys.readouterr().out.split()
+    assert len(paths) == 2
+    energies = [json.load(open(os.path.join(p, "run.json")))["result"]["energy"]
+                for p in paths]
+    assert energies == [4.0, 6.0]
+
+
+def test_dirs_no_match_is_an_error_with_empty_stdout(tmp_path, toy_path, capsys):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1", "--seeds", "0", "--db", db, "--serial"])
+    capsys.readouterr()
+    # a stray path fed to `rm -rf` because nothing matched is the failure mode here
+    assert main(["dirs", "--where", "a=999", "--db", db]) == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "no run directories matched" in out.err
+
+
+def test_dirs_rejects_unknown_column(tmp_path, toy_path):
+    db = _db(tmp_path)
+    main(["run", toy_path, "--axis", "a=1", "--seeds", "0", "--db", db, "--serial"])
+    with pytest.raises(SystemExit):
+        main(["dirs", "--where", "aa=1", "--db", db])
